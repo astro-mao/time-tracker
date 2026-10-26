@@ -1,68 +1,115 @@
-name: Build Android APK
+name: Build APK
 
 on:
-  workflow_dispatch:
   push:
     branches: [main, master]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - name: Checkout
+      - name: 1. Checkout
         uses: actions/checkout@v4
 
-      - name: Setup JDK 17
+      - name: 2. Setup Java 17
         uses: actions/setup-java@v4
         with:
-          distribution: zulu
+          distribution: temurin
           java-version: '17'
 
-      - name: Setup Flutter
+      - name: 3. Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.0'
+          flutter-version: '3.24.5'
           channel: stable
           cache: true
 
-      - name: Locate project root
+      - name: 4. Locate source
         run: |
-          if [ -f pubspec.yaml ] && [ -f lib/main.dart ]; then
-            echo "APP_DIR=." >> "$GITHUB_ENV"
-          elif [ -f time_tracker_app/pubspec.yaml ] && [ -f time_tracker_app/lib/main.dart ]; then
-            echo "APP_DIR=time_tracker_app" >> "$GITHUB_ENV"
-          else
-            echo "::error::找不到 pubspec.yaml 或 lib/main.dart，代码没有正确上传到仓库"
+          echo "candidates:"
+          find . -maxdepth 3 -name pubspec.yaml -not -path './.git/*' | sort
+          APP_DIR=""
+          BEST=999
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            d=$(dirname "$f")
+            if [ -f "$d/lib/main.dart" ] && grep -q "sqflite" "$f"; then
+              depth=$(printf '%s' "$d" | awk -F'/' '{print NF}')
+              if [ "$depth" -lt "$BEST" ]; then
+                BEST=$depth
+                APP_DIR=$d
+              fi
+            fi
+          done <<< "$(find . -maxdepth 3 -name pubspec.yaml -not -path './.git/*' | sort)"
+          if [ -z "$APP_DIR" ]; then
+            echo "::error::No valid source found (need pubspec.yaml + lib/main.dart). Upload src first."
             exit 1
           fi
+          echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
+          echo "Using project: $APP_DIR (depth $BEST)"
+          ls -la "$APP_DIR"
+          ls "$APP_DIR/lib"
 
-      - name: Verify app source
-        run: |
-          echo "APP_DIR=$APP_DIR"
-          if ! grep -q "sqflite" "$APP_DIR/pubspec.yaml"; then
-            echo "::error::pubspec.yaml 里没有 sqflite 依赖，上传的不是时间记录 App 的代码"
-            exit 1
-          fi
-          echo "source check passed"
-
-      - name: Create android scaffold if missing
+      - name: 5. Fix pubspec automatically
         run: |
           cd "$APP_DIR"
-          if [ ! -d android ]; then
-            flutter create --platforms=android --project-name time_tracker_app /tmp/scaffold
-            cp -r /tmp/scaffold/android .
+          echo "--- pubspec before ---"
+          head -n 25 pubspec.yaml
+          sed -i '1s/^\xEF\xBB\xBF//' pubspec.yaml
+          sed -i 's/\r$//' pubspec.yaml
+          sed -i -E 's/^([[:space:]]*)cross_file:.*/\1cross_file: ^0.3.3/' pubspec.yaml
+          echo "--- pubspec after ---"
+          head -n 25 pubspec.yaml
+
+      - name: 6. Create android scaffold
+        run: |
+          cd "$APP_DIR"
+          if [ ! -f android/app/build.gradle ] && [ ! -f android/app/build.gradle.kts ]; then
+            echo "android folder missing or incomplete, rebuilding it"
+            rm -rf android
+            flutter create --platforms=android --org com.example --project-name time_tracker_app /tmp/scaffold
+            cp -r /tmp/scaffold/android ./android
           fi
-          ls android
+          ls android/app
 
-      - name: Pub get
-        run: cd "$APP_DIR" && flutter pub get
+      - name: 7. Get packages
+        run: |
+          set -o pipefail
+          cd "$APP_DIR"
+          flutter pub get 2>&1 | tee /tmp/build.log
 
-      - name: Build release APK
-        run: cd "$APP_DIR" && flutter build apk --release --split-per-abi
+      - name: 8. Build APK
+        run: |
+          set -o pipefail
+          cd "$APP_DIR"
+          flutter build apk --release 2>&1 | tee -a /tmp/build.log
 
-      - name: Upload APK
+      - name: 9. Collect APK
+        if: success()
+        run: |
+          cp "$APP_DIR/build/app/outputs/flutter-apk/app-release.apk" "$GITHUB_WORKSPACE/app-release.apk"
+          ls -lh "$GITHUB_WORKSPACE/app-release.apk"
+
+      - name: 10. Show reason if failed
+        if: failure()
+        run: |
+          echo "### Build failed, last 20 log lines" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if [ -f /tmp/build.log ]; then
+            tail -n 20 /tmp/build.log >> "$GITHUB_STEP_SUMMARY"
+            tail -n 20 /tmp/build.log | while IFS= read -r l; do echo "::error::$l"; done
+          else
+            echo "Failed before build log started. Check step 4/6." >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Failed before build log started. Check step 4 and 6."
+          fi
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 11. Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: time-tracker-apk
-          path: "**/flutter-apk/*-release.apk"
+          path: app-release.apk
           if-no-files-found: error
