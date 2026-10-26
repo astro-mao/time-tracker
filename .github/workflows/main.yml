@@ -80,19 +80,25 @@ jobs:
           cd "$APP_DIR"
           flutter pub get 2>&1 | tee /tmp/build.log
 
-      - name: 8. Build APK
+      - name: 8. Analyze code
+        run: |
+          set -o pipefail
+          cd "$APP_DIR"
+          flutter analyze --no-fatal-warnings --no-fatal-infos 2>&1 | tee -a /tmp/build.log
+
+      - name: 9. Build APK
         run: |
           set -o pipefail
           cd "$APP_DIR"
           flutter build apk --release 2>&1 | tee -a /tmp/build.log
 
-      - name: 9. Collect APK
+      - name: 10. Collect APK
         if: success()
         run: |
           cp "$APP_DIR/build/app/outputs/flutter-apk/app-release.apk" "$GITHUB_WORKSPACE/app-release.apk"
           ls -lh "$GITHUB_WORKSPACE/app-release.apk"
 
-      - name: 10. Show reason if failed
+      - name: 11. Show reason if failed
         if: failure()
         run: |
           echo "### Build failed, last 20 log lines" >> "$GITHUB_STEP_SUMMARY"
@@ -106,7 +112,7 @@ jobs:
           fi
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 11. Upload APK
+      - name: 12. Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
