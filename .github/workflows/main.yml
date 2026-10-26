@@ -32,7 +32,7 @@ jobs:
       - name: 拉取 Dart 依赖
         run: flutter pub get
 
-           - name: 编译 APK (release 发布版 + 按 CPU 架构拆分，体积约 10~15MB)
+      - name: 编译 APK (release 发布版 + 按 CPU 架构拆分，体积约 10~15MB)
         run: flutter build apk --release --split-per-abi
 
       - name: 上传 APK 作为可下载产物
