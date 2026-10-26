@@ -189,7 +189,7 @@ class _StatisticsPageState extends State<StatisticsPage> {
                           centerBottom: activeEvent == null ? '今日总计' : '今日',
                         ),
                   if (slices.isNotEmpty) const SizedBox(height: 12),
-                  ..._today.map(_legend).toList(),
+                  ..._today.map((m) => _legend(m, total)).toList(),
                 ],
               ),
             ),
@@ -255,7 +255,7 @@ class _StatisticsPageState extends State<StatisticsPage> {
     );
   }
 
-  Widget _legend(Map<String, dynamic> m) {
+  Widget _legend(Map<String, dynamic> m, int total) {
     final pct = total > 0
         ? ((m['value'] as int) / total * 100).round()
         : 0;

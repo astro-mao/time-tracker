@@ -80,12 +80,13 @@ class _TimerRunningPageState extends State<TimerRunningPage> {
     await db.updateRecord(updated);
     AppState().running = null;
     AppState().notify();
-    if (mounted) {
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已记录 ${formatDuration(duration)}')),
-      );
-    }
+    if (!mounted) return;
+    // 先取 messenger 再 pop：pop 之后本页 context 已失效，不能再用它查祖先
+    final messenger = ScaffoldMessenger.of(context);
+    Navigator.pop(context);
+    messenger.showSnackBar(
+      SnackBar(content: Text('已记录 ${formatDuration(duration)}')),
+    );
   }
 
   /// 正常结束：以"现在"封口
