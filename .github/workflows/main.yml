@@ -8,36 +8,61 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: 拉取代码
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 安装 JDK 17
+      - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'zulu'
+          distribution: zulu
           java-version: '17'
 
-      - name: 安装 Flutter (stable)
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.22.0'
-          channel: 'stable'
+          channel: stable
           cache: true
 
-      - name: 补全安卓工程脚手架
-        run: flutter create --platforms=android --project-name time_tracker_app .
+      - name: Locate project root
+        run: |
+          if [ -f pubspec.yaml ] && [ -f lib/main.dart ]; then
+            echo "APP_DIR=." >> "$GITHUB_ENV"
+          elif [ -f time_tracker_app/pubspec.yaml ] && [ -f time_tracker_app/lib/main.dart ]; then
+            echo "APP_DIR=time_tracker_app" >> "$GITHUB_ENV"
+          else
+            echo "::error::找不到 pubspec.yaml 或 lib/main.dart，代码没有正确上传到仓库"
+            exit 1
+          fi
 
-      - name: 拉取 Dart 依赖
-        run: flutter pub get
+      - name: Verify app source
+        run: |
+          echo "APP_DIR=$APP_DIR"
+          if ! grep -q "sqflite" "$APP_DIR/pubspec.yaml"; then
+            echo "::error::pubspec.yaml 里没有 sqflite 依赖，上传的不是时间记录 App 的代码"
+            exit 1
+          fi
+          echo "source check passed"
 
-      - name: 编译 APK (release 发布版 + 按 CPU 架构拆分，体积约 10~15MB)
-        run: flutter build apk --release --split-per-abi
+      - name: Create android scaffold if missing
+        run: |
+          cd "$APP_DIR"
+          if [ ! -d android ]; then
+            flutter create --platforms=android --project-name time_tracker_app /tmp/scaffold
+            cp -r /tmp/scaffold/android .
+          fi
+          ls android
 
-      - name: 上传 APK 作为可下载产物
+      - name: Pub get
+        run: cd "$APP_DIR" && flutter pub get
+
+      - name: Build release APK
+        run: cd "$APP_DIR" && flutter build apk --release --split-per-abi
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: time-tracker-apk
-          path: build/app/outputs/flutter-apk/*.apk
+          path: "**/flutter-apk/*-release.apk"
           if-no-files-found: error
