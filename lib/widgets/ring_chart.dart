@@ -39,9 +39,15 @@ class RingChart extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(centerTop,
-                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                  style: const TextStyle(
+                    fontSize: 21,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF111827),
+                  )),
+              const SizedBox(height: 2),
               Text(centerBottom,
-                  style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                  style: const TextStyle(
+                      fontSize: 11.5, color: Color(0xFF9CA3AF))),
             ],
           ),
         ],
@@ -63,6 +69,27 @@ class _RingPainter extends CustomPainter {
     final cy = size.height / 2;
     final rOuter = size.width / 2 - 4;
     final rInner = rOuter * 0.62;
+
+    // 底层浅色轨道，让留白和有数据的部分看起来是一个完整的环
+    final track = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = rOuter - rInner
+      ..color = const Color(0xFFEEF2F8);
+    canvas.drawCircle(Offset(cx, cy), (rOuter + rInner) / 2, track);
+
+    // 只有一个活动时，整圈都应是它的颜色。
+    // 若用 arcTo 画 360°，起点与终点重合会让路径退化而不渲染（表现为空白），
+    // 因此改用「描边圆环」直接画整圈。
+    final positive = data.where((d) => d.value > 0).toList();
+    if (positive.length == 1) {
+      final ringPaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = rOuter - rInner
+        ..color = positive.first.color;
+      canvas.drawCircle(Offset(cx, cy), (rOuter + rInner) / 2, ringPaint);
+      return;
+    }
+
     final paint = Paint()..style = PaintingStyle.fill;
 
     double start = -pi / 2;

@@ -23,7 +23,7 @@ class DatabaseHelper {
     final path = join(await getDatabasesPath(), 'time_tracker.db');
     return openDatabase(
       path,
-      version: 1,
+      version: 3,
       onCreate: (database, _) async {
         await database.execute('''
           CREATE TABLE events(
@@ -44,9 +44,22 @@ class DatabaseHelper {
             end_time INTEGER,
             duration INTEGER,
             date_str TEXT,
-            status INTEGER
+            status INTEGER,
+            note TEXT,
+            source INTEGER DEFAULT 0
           )
         ''');
+      },
+      // v1 -> v2：给记录增加「备注」列。用 ALTER TABLE 增量加列，老数据原样保留。
+      // v2 -> v3：增加「来源」列（0 = 正常计时，1 = 手动补录）。
+      onUpgrade: (database, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await database.execute('ALTER TABLE records ADD COLUMN note TEXT');
+        }
+        if (oldVersion < 3) {
+          await database.execute(
+              'ALTER TABLE records ADD COLUMN source INTEGER DEFAULT 0');
+        }
       },
     );
   }
@@ -95,6 +108,26 @@ class DatabaseHelper {
 
   Future<int> deleteRecord(int id) =>
       db.then((d) => d.delete('records', where: 'id = ?', whereArgs: [id]));
+
+  /// 查与 [start, end) 时间重叠的已完成记录（补录前的"重叠"提醒用）
+  Future<List<TimeRecord>> getOverlaps(int start, int end) async {
+    final d = await db;
+    final rows = await d.query(
+      'records',
+      where: 'status = 1 AND start_time < ? AND end_time > ?',
+      whereArgs: [end, start],
+      orderBy: 'start_time ASC',
+    );
+    return rows.map(TimeRecord.fromMap).toList();
+  }
+
+  /// 只更新备注，避免整行覆盖（记录页补充描述时用）
+  Future<int> updateNote(int id, String note) => db.then((d) => d.update(
+        'records',
+        {'note': note.trim().isEmpty ? null : note.trim()},
+        where: 'id = ?',
+        whereArgs: [id],
+      ));
 
   // ---------------- 统计 ----------------
   /// 今日按事件聚合：[{name, color, value(毫秒)}]

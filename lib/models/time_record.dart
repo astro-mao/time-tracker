@@ -9,6 +9,8 @@ class TimeRecord {
   int duration; // 时长（毫秒），结束才填
   String dateStr; // 'YYYY-MM-DD'，便于按日聚合
   int status; // 0 = 计时中(running)，1 = 已完成(done)
+  String? note; // 备注（可选），结束计时时填写，之后可在记录页补充
+  int source; // 0 = 正常计时，1 = 手动补录
 
   TimeRecord({
     this.id,
@@ -20,6 +22,8 @@ class TimeRecord {
     this.duration = 0,
     required this.dateStr,
     this.status = 0,
+    this.note,
+    this.source = 0,
   });
 
   Map<String, dynamic> toMap() => {
@@ -32,6 +36,8 @@ class TimeRecord {
         'duration': duration,
         'date_str': dateStr,
         'status': status,
+        'note': note,
+        'source': source,
       };
 
   factory TimeRecord.fromMap(Map<String, dynamic> m) => TimeRecord(
@@ -44,5 +50,7 @@ class TimeRecord {
         duration: m['duration'] ?? 0,
         dateStr: m['date_str'],
         status: m['status'] ?? 0,
+        note: m['note'] as String?,
+        source: (m['source'] as int?) ?? 0,
       );
 }

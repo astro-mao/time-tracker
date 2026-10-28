@@ -4,6 +4,7 @@ import '../app_state.dart';
 import '../models/time_record.dart';
 import '../models/event.dart';
 import '../utils/format.dart';
+import '../utils/ui.dart';
 import '../widgets/ring_chart.dart';
 
 /// 数据看板：今日环形占比图 + 近 7 天柱状趋势，支持按事件筛选
@@ -21,7 +22,7 @@ class _StatisticsPageState extends State<StatisticsPage> {
   List<Map<String, dynamic>> _week = [];
   int? _filterEventId; // null = 全部
 
-  static const _primary = Color(0xFF2563EB);
+  static const _primary = AppColors.primary;
 
   @override
   void initState() {
@@ -110,12 +111,11 @@ class _StatisticsPageState extends State<StatisticsPage> {
     _load();
   }
 
-  Color _color(String hex) =>
-      Color(int.parse('FF${hex.replaceFirst('#', '')}', radix: 16));
+  Color _color(String hex) => hexColor(hex);
 
   @override
   Widget build(BuildContext context) {
-    final total = _today.fold(0, (s, m) => s + (m['value'] as int));
+    final total = _today.fold(0, (s, m) => s + ((m['value'] as int?) ?? 0));
     final slices = _today
         .map((m) => RingSlice(_color(m['color']), (m['value'] as int).toDouble()))
         .toList();
@@ -123,43 +123,32 @@ class _StatisticsPageState extends State<StatisticsPage> {
       final v = m['value'] as int;
       return v > s ? v : s;
     });
+    final weekTotal = _week.fold(0, (s, m) => s + (m['value'] as int));
     final activeEvent =
         _filterEventId == null ? null : _findEvent(_filterEventId!);
 
     return Scaffold(
       appBar: AppBar(title: const Text('统计')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+      body: Column(
         children: [
           // -------- 筛选条 --------
           Container(
             width: double.infinity,
-            margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(14),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(.04),
-                  blurRadius: 6,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
+            padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
                 children: [
-                  _chip('全部', isActive: _filterEventId == null,
+                  pill('全部',
+                      active: _filterEventId == null,
                       onTap: () => _setFilter(null)),
                   const SizedBox(width: 8),
                   ..._events.map((e) => Padding(
                         padding: const EdgeInsets.only(right: 8),
-                        child: _chip(
+                        child: pill(
                           e.name,
-                          color: _color(e.color),
-                          isActive: _filterEventId == e.id,
+                          dotColor: hexColor(e.color),
+                          active: _filterEventId == e.id,
                           onTap: () => _setFilter(e.id),
                         ),
                       )),
@@ -167,48 +156,19 @@ class _StatisticsPageState extends State<StatisticsPage> {
               ),
             ),
           ),
-
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _load,
+              color: AppColors.primary,
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(18, 0, 18, 24),
                 children: [
-                  Text(
-                      activeEvent == null
-                          ? '今日时间分布'
-                          : '「${activeEvent.name}」今日',
-                      style:
-                          TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                  const SizedBox(height: 12),
-                  slices.isEmpty
-                      ? const Text('今天还没有记录',
-                          style: TextStyle(color: Colors.grey))
-                      : RingChart(
-                          data: slices,
-                          centerTop: formatDuration(total),
-                          centerBottom: activeEvent == null ? '今日总计' : '今日',
-                        ),
-                  if (slices.isNotEmpty) const SizedBox(height: 12),
-                  ..._today.map((m) => _legend(m, total)).toList(),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                      activeEvent == null
-                          ? '近 7 天趋势'
-                          : '「${activeEvent.name}」近 7 天',
-                      style:
-                          TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                  const SizedBox(height: 12),
-                  ..._week.map((m) => _bar(m, maxWeek)).toList(),
+                  _summaryCard(total, activeEvent, slices.length),
+                  const SizedBox(height: 16),
+                  _ringCard(total, slices, activeEvent),
+                  const SizedBox(height: 16),
+                  _weekCard(maxWeek, weekTotal, activeEvent),
                 ],
               ),
             ),
@@ -218,82 +178,268 @@ class _StatisticsPageState extends State<StatisticsPage> {
     );
   }
 
-  Widget _chip(String label,
-      {required bool isActive, required VoidCallback onTap, Color? color}) {
-    final dot = color != null
-        ? Container(
-            width: 8,
-            height: 8,
-            margin: const EdgeInsets.only(right: 6),
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-          )
-        : null;
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-        decoration: BoxDecoration(
-          color: isActive ? _primary : Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: isActive ? _primary : Colors.grey.shade300,
-          ),
-        ),
-        child: Row(
-          children: [
-            if (dot != null) dot,
-            Text(
-              label,
-              style: TextStyle(
-                color: isActive ? Colors.white : Colors.grey.shade700,
-                fontSize: 13,
-              ),
+  Widget _summaryCard(int total, Event? activeEvent, int kinds) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+      decoration: gradientCard(),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  activeEvent == null ? '今日总计' : '「${activeEvent.name}」今日',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.82),
+                    fontSize: 12.5,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  formatDuration(total),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 28,
+                    fontWeight: FontWeight.w800,
+                    height: 1.1,
+                  ),
+                ),
+              ],
             ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(.16),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Column(
+              children: [
+                Text(
+                  '$kinds',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                Text(
+                  '个事件',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.8),
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _ringCard(int total, List<RingSlice> slices, Event? activeEvent) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
+      decoration: softCard(),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.donut_large_rounded,
+                  size: 18, color: AppColors.primary),
+              const SizedBox(width: 8),
+              Text(
+                activeEvent == null ? '今日时间分布' : '「${activeEvent.name}」占比',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 15,
+                  color: AppColors.text,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          if (slices.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 30),
+              child: Column(
+                children: [
+                  Icon(Icons.donut_large_rounded,
+                      size: 40, color: AppColors.faint.withOpacity(.5)),
+                  const SizedBox(height: 10),
+                  const Text('今天还没有记录',
+                      style:
+                          TextStyle(color: AppColors.faint, fontSize: 13)),
+                ],
+              ),
+            )
+          else ...[
+            RingChart(
+              data: slices,
+              size: 196,
+              centerTop: formatDuration(total),
+              centerBottom: activeEvent == null ? '今日总计' : '今日',
+            ),
+            const SizedBox(height: 10),
+            ..._today.map((m) => _legend(m, total)).toList(),
           ],
-        ),
+        ],
       ),
     );
   }
 
   Widget _legend(Map<String, dynamic> m, int total) {
-    final pct = total > 0
-        ? ((m['value'] as int) / total * 100).round()
-        : 0;
-    return ListTile(
-      leading: CircleAvatar(backgroundColor: _color(m['color']), radius: 8),
-      title: Text(m['name']),
-      trailing: Text('${formatDuration(m['value'])} · $pct%',
-          style: const TextStyle(color: Colors.grey)),
+    final value = (m['value'] as int?) ?? 0;
+    final pct = total > 0 ? (value / total * 100).round() : 0;
+    final c = _color(m['color']);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 2),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 9,
+                height: 9,
+                decoration: BoxDecoration(color: c, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  m['name'],
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 13.5, color: AppColors.text),
+                ),
+              ),
+              Text(
+                formatDuration(value),
+                style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.text),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 38,
+                child: Text(
+                  '$pct%',
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(
+                      fontSize: 12, color: AppColors.faint),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: pct / 100,
+              backgroundColor: const Color(0xFFEEF2F8),
+              color: c,
+              minHeight: 5,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
-  Widget _bar(Map<String, dynamic> m, int maxWeek) {
-    final v = m['value'] as int;
-    final pct = maxWeek > 0 ? (v / maxWeek * 100).round() : 0;
-    final label = (m['date'] as String).substring(5);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
+  Widget _weekCard(int maxWeek, int weekTotal, Event? activeEvent) {
+    final todayS = todayStr();
+    return Container(
+      padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+      decoration: softCard(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Row(
+            children: [
+              const Icon(Icons.bar_chart_rounded,
+                  size: 18, color: AppColors.primary),
+              const SizedBox(width: 8),
+              Text(
+                activeEvent == null ? '近 7 天趋势' : '「${activeEvent.name}」近 7 天',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 15,
+                  color: AppColors.text,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '合计 ${formatDuration(weekTotal)}',
+                style: const TextStyle(fontSize: 11.5, color: AppColors.faint),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
           SizedBox(
-              width: 48,
-              child: Text(label,
-                  style: const TextStyle(fontSize: 12, color: Colors.grey))),
-          Expanded(
-            child: LinearProgressIndicator(
-              value: pct / 100,
-              backgroundColor: Colors.grey[200],
-              color: const Color(0xFF07C160),
-              minHeight: 14,
-              borderRadius: BorderRadius.circular(7),
+            height: 150,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: _week.map((m) {
+                final v = m['value'] as int;
+                final ratio = maxWeek > 0 ? (v / maxWeek).clamp(0.0, 1.0) : 0.0;
+                final date = m['date'] as String;
+                final isToday = date == todayS;
+                final label = date.substring(5);
+                return Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 3),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        Text(
+                          v > 0 ? '${(v / 60000).round()}' : '',
+                          style: TextStyle(
+                            fontSize: 9.5,
+                            color: isToday ? _primary : AppColors.faint,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Container(
+                          height: 96 * ratio + 4,
+                          width: 26,
+                          decoration: BoxDecoration(
+                            color: isToday
+                                ? _primary
+                                : _primary.withOpacity(.20),
+                            borderRadius: BorderRadius.circular(7),
+                          ),
+                        ),
+                        const SizedBox(height: 7),
+                        Text(
+                          label,
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            color: isToday ? _primary : AppColors.faint,
+                            fontWeight:
+                                isToday ? FontWeight.w700 : FontWeight.w400,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
             ),
           ),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 64,
-            child: Text(formatDuration(v),
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
-                textAlign: TextAlign.right),
+          const SizedBox(height: 10),
+          const Text(
+            '柱上数字单位：分钟',
+            style: TextStyle(fontSize: 10.5, color: AppColors.faint),
           ),
         ],
       ),
