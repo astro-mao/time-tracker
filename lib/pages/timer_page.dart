@@ -53,16 +53,13 @@ class _TimerPageState extends State<TimerPage> {
       total += (m['value'] as int?) ?? 0;
     }
     if (running != null) {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      if (running.dateStr == todayStr()) {
-        total += now - running.startTime;
-      } else {
-        // 跨天：只把"今天 0 点到现在"算进今日
-        final n = DateTime.now();
-        final dayStart =
-            DateTime(n.year, n.month, n.day).millisecondsSinceEpoch;
-        if (now > dayStart) total += now - dayStart;
-      }
+      // 进行中的计时：只把"今天 0 点（或开始时刻，取较晚者）到现在"计入今日
+      final n = DateTime.now();
+      final now = n.millisecondsSinceEpoch;
+      final dayStart =
+          DateTime(n.year, n.month, n.day).millisecondsSinceEpoch;
+      final from = running.startTime > dayStart ? running.startTime : dayStart;
+      if (now > from) total += now - from;
     }
 
     if (!mounted) return;

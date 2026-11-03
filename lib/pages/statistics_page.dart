@@ -55,26 +55,42 @@ class _StatisticsPageState extends State<StatisticsPage> {
 
   /// 把"进行中"的计时（status=0）按已用时间合并进统计。
   /// 这样即使还没点"结束"，你回来也能在统计里看到已经花了多少时间。
+  /// 跨天也按自然日逐段切分，保证每一天的账都对。
   /// 处于筛选状态时，只合并该事件的进行中时长。
   void _mergeRunning(List<Map<String, dynamic>> today,
       List<Map<String, dynamic>> week, TimeRecord? running) {
     if (running == null) return;
     if (_filterEventId != null && running.eventId != _filterEventId) return;
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final elapsed = now - running.startTime;
-    if (elapsed <= 0) return;
-    final startDay = running.dateStr;
-    final todayS = todayStr();
+    final now = DateTime.now();
+    final nowMs = now.millisecondsSinceEpoch;
+    final end = nowMs;
+    final start = running.startTime;
+    if (end <= start) return;
+    final todayS = todayStr(now);
 
-    // 归属开始日：加进近 7 天（若开始日在范围内）
-    _addToWeek(week, startDay, elapsed);
-    // 若开始日就是今天，整段都算今天
-    if (startDay == todayS) {
-      _addToToday(today, running, elapsed);
-    } else {
-      // 跨天补偿：开始日 < 今天且仍在跑 → 今天 0 点至今的部分计入今日
-      final part = now - _startOfTodayMs();
-      if (part > 0) _addToToday(today, running, part);
+    // 从开始时刻逐日切分，直到现在
+    var cursor = start;
+    while (cursor < end) {
+      final cd = DateTime.fromMillisecondsSinceEpoch(cursor);
+      final key = todayStr(cd);
+      final dayEnd =
+          DateTime(cd.year, cd.month, cd.day + 1).millisecondsSinceEpoch;
+      final segEnd = end < dayEnd ? end : dayEnd;
+      final v = segEnd - cursor;
+      if (v <= 0) {
+        cursor = segEnd;
+        continue;
+      }
+      // 近 7 天趋势：只累计落在 7 天窗口内的日期
+      final wi = week.indexWhere((m) => m['date'] == key);
+      if (wi >= 0) {
+        week[wi] = {...week[wi], 'value': (week[wi]['value'] as int) + v};
+      }
+      // 今日环形图：只有今天这一段的计入今日
+      if (key == todayS) {
+        _addToToday(today, running, v);
+      }
+      cursor = segEnd;
     }
   }
 
@@ -85,18 +101,6 @@ class _StatisticsPageState extends State<StatisticsPage> {
     } else {
       today.add({'name': r.eventName, 'color': r.eventColor, 'value': v});
     }
-  }
-
-  void _addToWeek(List<Map<String, dynamic>> week, String date, int v) {
-    final i = week.indexWhere((m) => m['date'] == date);
-    if (i >= 0) {
-      week[i] = {...week[i], 'value': (week[i]['value'] as int) + v};
-    }
-  }
-
-  int _startOfTodayMs() {
-    final n = DateTime.now();
-    return DateTime(n.year, n.month, n.day).millisecondsSinceEpoch;
   }
 
   Event? _findEvent(int id) {

@@ -33,7 +33,7 @@ class _BackfillSheetState extends State<_BackfillSheet> {
   final _db = DatabaseHelper();
   final _noteCtrl = TextEditingController();
 
-  int _eventIdx = 0;
+  int _eventIdx = -1; // -1 = 未选择事件（默认不勾选，逼用户主动选）
   late DateTime _start;
   late DateTime _end;
   String? _error;
@@ -70,7 +70,8 @@ class _BackfillSheetState extends State<_BackfillSheet> {
     super.dispose();
   }
 
-  Event? get _event => widget.events.isEmpty ? null : widget.events[_eventIdx];
+  Event? get _event =>
+      (_eventIdx < 0 || widget.events.isEmpty) ? null : widget.events[_eventIdx];
 
   int get _duration => _end.difference(_start).inMilliseconds;
 
@@ -158,7 +159,10 @@ class _BackfillSheetState extends State<_BackfillSheet> {
 
   Future<void> _save() async {
     final e = _event;
-    if (e == null || e.id == null) return;
+    if (e == null || e.id == null) {
+      setState(() => _error = '请先选择一个事件');
+      return;
+    }
     final now = DateTime.now();
     if (_duration <= 0) {
       setState(() => _error = '结束时间要晚于开始时间');
@@ -180,7 +184,7 @@ class _BackfillSheetState extends State<_BackfillSheet> {
       startTime: _start.millisecondsSinceEpoch,
       endTime: _end.millisecondsSinceEpoch,
       duration: _duration,
-      dateStr: todayStr(_end),
+      dateStr: todayStr(_start),
       status: 1,
       note: note.isEmpty ? null : note,
       source: 1,
@@ -288,7 +292,7 @@ class _BackfillSheetState extends State<_BackfillSheet> {
               if (_crossDay)
                 const Padding(
                   padding: EdgeInsets.only(top: 6, left: 48),
-                  child: Text('跨天：这条记录会算在结束那天',
+                  child: Text('跨天：会按每天的实际时长分别计入统计',
                       style: TextStyle(fontSize: 11.5, color: AppColors.faint)),
                 ),
               if (_overlaps.isNotEmpty)

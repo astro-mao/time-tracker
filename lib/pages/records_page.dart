@@ -47,7 +47,10 @@ class _RecordsPageState extends State<RecordsPage> {
     final groups = <String, List<TimeRecord>>{};
     int total = 0;
     for (final r in filtered) {
-      groups.putIfAbsent(r.dateStr, () => []).add(r);
+      // 按"开始日期"分组（跨天记录挂在开始那天，统计则已按天切分）
+      final dayKey =
+          todayStr(DateTime.fromMillisecondsSinceEpoch(r.startTime));
+      groups.putIfAbsent(dayKey, () => []).add(r);
       total += r.duration;
     }
     if (!mounted) return;
@@ -97,6 +100,24 @@ class _RecordsPageState extends State<RecordsPage> {
     } catch (_) {
       return '';
     }
+  }
+
+  /// 记录的时间范围显示：同一天只显示时:分；跨天则带日期，避免"23:30 - 00:30"看不懂。
+  String _timeRange(TimeRecord r) {
+    final s = DateTime.fromMillisecondsSinceEpoch(r.startTime);
+    final e = r.endTime != null
+        ? DateTime.fromMillisecondsSinceEpoch(r.endTime!)
+        : null;
+    final sameDay = e == null ||
+        (s.year == e.year && s.month == e.month && s.day == e.day);
+    if (sameDay) {
+      return '${formatClock(r.startTime)} - '
+          '${e != null ? formatClock(r.endTime!) : ''}';
+    }
+    String md(DateTime x) => '${x.month.toString().padLeft(2, '0')}-'
+        '${x.day.toString().padLeft(2, '0')} '
+        '${formatClock(x.millisecondsSinceEpoch)}';
+    return '${md(s)} - ${md(e!)}';
   }
 
   @override
@@ -333,7 +354,7 @@ class _RecordsPageState extends State<RecordsPage> {
                             size: 12, color: AppColors.faint),
                         const SizedBox(width: 4),
                         Text(
-                          '${formatClock(r.startTime)} - ${r.endTime != null ? formatClock(r.endTime!) : ''}',
+                          _timeRange(r),
                           style: const TextStyle(
                               fontSize: 12, color: AppColors.sub),
                         ),

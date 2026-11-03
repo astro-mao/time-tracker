@@ -80,9 +80,9 @@ class _TimerRunningPageState extends State<TimerRunningPage> {
       startTime: widget.running.startTime,
       endTime: end,
       duration: duration,
-      // 日期归属跟随"实际结束时间"：跨天修正后，记录应落在结束那天，
-      // 否则在记录页/统计页会挂到开始那天的账上。
-      dateStr: todayStr(DateTime.fromMillisecondsSinceEpoch(end)),
+      // 归类日期跟随"开始时间"：记录列表按开始那天归档。
+      // 统计已按 start_time/end_time 逐日切分，跨天数据会分别计入每一天。
+      dateStr: todayStr(DateTime.fromMillisecondsSinceEpoch(widget.running.startTime)),
       status: 1,
       note: noteText.isEmpty ? null : noteText,
     );
