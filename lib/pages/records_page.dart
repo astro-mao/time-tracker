@@ -117,7 +117,7 @@ class _RecordsPageState extends State<RecordsPage> {
     String md(DateTime x) => '${x.month.toString().padLeft(2, '0')}-'
         '${x.day.toString().padLeft(2, '0')} '
         '${formatClock(x.millisecondsSinceEpoch)}';
-    return '${md(s)} - ${md(e!)}';
+    return '${md(s)} - ${md(e)}';
   }
 
   @override
