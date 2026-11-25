@@ -272,4 +272,107 @@ class DatabaseHelper {
 
     return dates.map((dt) => {'date': dt, 'value': values[dt] ?? 0}).toList();
   }
+
+  /// 查询近 [fromMs, toMs) 内与区间重叠的已完成记录。
+  /// 三个长周期图表（作息规律 / 30天结构 / 月度总量）共用此底层查询，
+  /// 保证统计口径与今日、近7天完全一致。
+  Future<List<Map<String, dynamic>>> _queryRange(
+      int fromMs, int toMs, int? eventId) async {
+    final d = await db;
+    final where = eventId == null
+        ? 'status = 1 AND start_time < ? AND end_time > ?'
+        : 'status = 1 AND event_id = ? AND start_time < ? AND end_time > ?';
+    final args =
+        eventId == null ? [toMs, fromMs] : [eventId, toMs, fromMs];
+    return d.query('records', where: where, whereArgs: args);
+  }
+
+  /// 近 [days] 天内，按 (自然日, 事件) 聚合的时长。
+  /// 返回 [{date:'YYYY-MM-DD', name, color, value(毫秒)}]
+  /// 跨天记录按每天实际占用时长分别计入；传 eventId 时只统计该事件。
+  Future<List<Map<String, dynamic>>> getDailyByEvent({
+    required int days,
+    int? eventId,
+  }) async {
+    final now = DateTime.now();
+    final fromDate = now.subtract(Duration(days: days - 1));
+    final fromMs = DateTime(fromDate.year, fromDate.month, fromDate.day)
+        .millisecondsSinceEpoch;
+    final toMs =
+        DateTime(now.year, now.month, now.day + 1).millisecondsSinceEpoch;
+    final rows = await _queryRange(fromMs, toMs, eventId);
+
+    final agg = <String, Map<String, dynamic>>{};
+    for (final row in rows) {
+      final r = TimeRecord.fromMap(row);
+      final end = r.endTime ?? r.startTime;
+      var cursor = r.startTime < fromMs ? fromMs : r.startTime;
+      while (cursor < end) {
+        final dt = DateTime.fromMillisecondsSinceEpoch(cursor);
+        final key = todayStr(dt);
+        final dayEnd =
+            DateTime(dt.year, dt.month, dt.day + 1).millisecondsSinceEpoch;
+        final segEnd = end < dayEnd ? end : dayEnd;
+        if (segEnd > cursor) {
+          final mapKey = '$key|${r.eventName}';
+          final cur = agg[mapKey];
+          if (cur == null) {
+            agg[mapKey] = {
+              'date': key,
+              'name': r.eventName,
+              'color': r.eventColor,
+              'value': segEnd - cursor,
+            };
+          } else {
+            cur['value'] = (cur['value'] as int) + (segEnd - cursor);
+          }
+        }
+        cursor = segEnd;
+      }
+    }
+    return agg.values.toList();
+  }
+
+  /// 近 [days] 天内，按 (星期几, 2小时时段) 聚合的时长。
+  /// 返回 [{weekday:1..7, slot:0..11, value(毫秒)}]
+  /// slot 0 = 0~2点，slot 1 = 2~4点 …… slot 11 = 22~24点。
+  Future<List<Map<String, dynamic>>> getSlotByWeekday({
+    required int days,
+    int? eventId,
+  }) async {
+    final now = DateTime.now();
+    final fromDate = now.subtract(Duration(days: days - 1));
+    final fromMs = DateTime(fromDate.year, fromDate.month, fromDate.day)
+        .millisecondsSinceEpoch;
+    final toMs =
+        DateTime(now.year, now.month, now.day + 1).millisecondsSinceEpoch;
+    final rows = await _queryRange(fromMs, toMs, eventId);
+
+    final agg = <String, int>{};
+    for (final row in rows) {
+      final r = TimeRecord.fromMap(row);
+      final end = r.endTime ?? r.startTime;
+      var cursor = r.startTime < fromMs ? fromMs : r.startTime;
+      while (cursor < end) {
+        final dt = DateTime.fromMillisecondsSinceEpoch(cursor);
+        final hourEnd =
+            DateTime(dt.year, dt.month, dt.day, dt.hour + 1)
+                .millisecondsSinceEpoch;
+        final segEnd = end < hourEnd ? end : hourEnd;
+        if (segEnd > cursor) {
+          final key = '${dt.weekday}_${dt.hour ~/ 2}';
+          agg[key] = (agg[key] ?? 0) + (segEnd - cursor);
+        }
+        cursor = segEnd;
+      }
+    }
+    return agg.entries.map((e) {
+      final parts = e.key.split('_');
+      return {
+        'weekday': int.parse(parts[0]),
+        'slot': int.parse(parts[1]),
+        'value': e.value,
+      };
+    }).toList();
+  }
 }

@@ -6,6 +6,9 @@ import '../models/event.dart';
 import '../utils/format.dart';
 import '../utils/ui.dart';
 import '../widgets/ring_chart.dart';
+import '../widgets/routine_heatmap.dart';
+import '../widgets/stacked_area_chart.dart';
+import '../widgets/monthly_trend_chart.dart';
 
 /// 数据看板：今日环形占比图 + 近 7 天柱状趋势，支持按事件筛选
 class StatisticsPage extends StatefulWidget {
@@ -20,6 +23,10 @@ class _StatisticsPageState extends State<StatisticsPage> {
   List<Event> _events = [];
   List<Map<String, dynamic>> _today = [];
   List<Map<String, dynamic>> _week = [];
+  // 长周期三图：近30天按日×事件、近12周时段网格、近12月按日×事件
+  List<Map<String, dynamic>> _daily30 = [];
+  List<Map<String, dynamic>> _slots = [];
+  List<Map<String, dynamic>> _daily365 = [];
   int? _filterEventId; // null = 全部
 
   static const _primary = AppColors.primary;
@@ -45,12 +52,132 @@ class _StatisticsPageState extends State<StatisticsPage> {
     final today = await db.getTodayByEvent(eventId: _filterEventId);
     final week = await db.getWeekDaily(eventId: _filterEventId);
     _mergeRunning(today, week, running); // 把"进行中"的已用时间也算进统计
+
+    // 长周期三图：一次查询按日×事件，三张图共用同一份底数据
+    var daily365 = await db.getDailyByEvent(days: 365, eventId: _filterEventId);
+    var slots = await db.getSlotByWeekday(days: 84, eventId: _filterEventId);
+    _mergeRunningIntoDaily(daily365, running); // 进行中也要计入长周期
+    _mergeRunningIntoSlots(slots, running);
+
+    final recent30 = daily365
+        .where((m) => (m['date'] as String).compareTo(_daysAgo(29)) >= 0)
+        .toList();
+
     if (!mounted) return;
     setState(() {
       _events = events;
       _today = today;
       _week = week;
+      _daily30 = recent30;
+      _slots = slots;
+      _daily365 = daily365;
     });
+  }
+
+  /// 相对今天往前 [n] 天的日期串（用于筛选近30天）
+  String _daysAgo(int n) =>
+      todayStr(DateTime.now().subtract(Duration(days: n)));
+
+  /// 把进行中的计时合并进"按日×事件"数据（长周期图用）
+  void _mergeRunningIntoDaily(
+      List<Map<String, dynamic>> daily, TimeRecord? running) {
+    if (running == null) return;
+    if (_filterEventId != null && running.eventId != _filterEventId) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now <= running.startTime) return;
+    var cursor = running.startTime;
+    while (cursor < now) {
+      final cd = DateTime.fromMillisecondsSinceEpoch(cursor);
+      final key = todayStr(cd);
+      final dayEnd =
+          DateTime(cd.year, cd.month, cd.day + 1).millisecondsSinceEpoch;
+      final segEnd = now < dayEnd ? now : dayEnd;
+      final v = segEnd - cursor;
+      if (v > 0) {
+        final i = daily.indexWhere((m) =>
+            m['date'] == key && m['name'] == running.eventName);
+        if (i >= 0) {
+          daily[i] = {
+            ...daily[i],
+            'value': (daily[i]['value'] as int) + v
+          };
+        } else {
+          daily.add({
+            'date': key,
+            'name': running.eventName,
+            'color': running.eventColor,
+            'value': v,
+          });
+        }
+      }
+      cursor = segEnd;
+    }
+  }
+
+  /// 把进行中的计时合并进"时段×星期"网格
+  void _mergeRunningIntoSlots(
+      List<Map<String, dynamic>> slots, TimeRecord? running) {
+    if (running == null) return;
+    if (_filterEventId != null && running.eventId != _filterEventId) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now <= running.startTime) return;
+    var cursor = running.startTime;
+    while (cursor < now) {
+      final cd = DateTime.fromMillisecondsSinceEpoch(cursor);
+      final hourEnd =
+          DateTime(cd.year, cd.month, cd.day, cd.hour + 1).millisecondsSinceEpoch;
+      final segEnd = now < hourEnd ? now : hourEnd;
+      final v = segEnd - cursor;
+      if (v > 0) {
+        final key = '${cd.weekday}_${cd.hour ~/ 2}';
+        final i = slots.indexWhere((m) =>
+            '${m['weekday']}_${m['slot']}' == key);
+        if (i >= 0) {
+          slots[i] = {...slots[i], 'value': (slots[i]['value'] as int) + v};
+        } else {
+          slots.add({'weekday': cd.weekday, 'slot': cd.hour ~/ 2, 'value': v});
+        }
+      }
+      cursor = segEnd;
+    }
+  }
+
+  /// 从按日数据聚合成近12个月的总时长柱状数据
+  List<Map<String, dynamic>> _buildMonths() {
+    final now = DateTime.now();
+    final months = <Map<String, dynamic>>[];
+    // 生成最近12个月的 key（年*12+月）
+    final keys = <int>[];
+    for (int i = 11; i >= 0; i--) {
+      final d = DateTime(now.year, now.month - i, 1);
+      keys.add(d.year * 12 + d.month);
+    }
+    final sums = <int, int>{};
+    final meta = <int, Map<String, int>>{};
+    for (int i = 11; i >= 0; i--) {
+      final d = DateTime(now.year, now.month - i, 1);
+      final key = d.year * 12 + d.month;
+      sums[key] = 0;
+      meta[key] = {'year': d.year, 'month': d.month};
+    }
+    for (final m in _daily365) {
+      final parts = (m['date'] as String).split('-');
+      if (parts.length != 3) continue;
+      final key = int.parse(parts[0]) * 12 + int.parse(parts[1]);
+      if (sums.containsKey(key)) {
+        sums[key] = sums[key]! + (m['value'] as int);
+      }
+    }
+    for (final key in keys) {
+      final m = meta[key]!;
+      months.add({
+        'label': '${m['month']}月',
+        'year': m['year'],
+        'month': m['month'],
+        'value': sums[key] ?? 0,
+      });
+    }
+    return months;
   }
 
   /// 把"进行中"的计时（status=0）按已用时间合并进统计。
@@ -173,6 +300,12 @@ class _StatisticsPageState extends State<StatisticsPage> {
                   _ringCard(total, slices, activeEvent),
                   const SizedBox(height: 16),
                   _weekCard(maxWeek, weekTotal, activeEvent),
+                  const SizedBox(height: 16),
+                  _monthCard(activeEvent),
+                  const SizedBox(height: 16),
+                  _stackCard(activeEvent),
+                  const SizedBox(height: 16),
+                  _routineCard(activeEvent),
                 ],
               ),
             ),
@@ -447,6 +580,72 @@ class _StatisticsPageState extends State<StatisticsPage> {
           ),
         ],
       ),
+    );
+  }
+
+  /// 长周期卡片通用外壳：标题 + 内容
+  Widget _longCard(IconData icon, String title, String? subtitle,
+      Widget child) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+      decoration: softCard(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 18, color: AppColors.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                    color: AppColors.text,
+                  ),
+                ),
+              ),
+              if (subtitle != null)
+                Text(subtitle,
+                    style: const TextStyle(
+                        fontSize: 11, color: AppColors.faint)),
+            ],
+          ),
+          const SizedBox(height: 14),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _monthCard(Event? activeEvent) {
+    final months = _buildMonths();
+    return _longCard(
+      Icons.trending_up_rounded,
+      activeEvent == null ? '月度总量趋势' : '「${activeEvent.name}」月度趋势',
+      '近 12 个月',
+      MonthlyTrendChart(months: months),
+    );
+  }
+
+  Widget _stackCard(Event? activeEvent) {
+    return _longCard(
+      Icons.area_chart_rounded,
+      activeEvent == null ? '时间结构变化' : '「${activeEvent.name}」每日趋势',
+      '近 30 天',
+      StackedAreaChart(daily: _daily30),
+    );
+  }
+
+  Widget _routineCard(Event? activeEvent) {
+    return _longCard(
+      Icons.grid_view_rounded,
+      activeEvent == null ? '作息规律' : '「${activeEvent.name}」作息规律',
+      '近 12 周',
+      RoutineHeatmap(cells: _slots, weeks: 12),
     );
   }
 }
