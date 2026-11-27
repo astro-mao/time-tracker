@@ -1,7 +1,7 @@
 name: time_tracker_app
 description: 时间记录 App（安卓端）— 点击事件开始计时，看板统计，CSV 导出
 publish_to: 'none'
-version: 1.2.1+4
+version: 1.2.2+5
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
