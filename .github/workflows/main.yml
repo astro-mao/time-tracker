@@ -14,8 +14,8 @@ jobs:
       # 看不到 = 你推上去的还是旧 workflow（图标/签名那几步根本不存在）。
       - name: 0. Workflow revision
         run: |
-          echo "WORKFLOW-REV: 2026-11-28-SELFCONTAINED-v4"
-          echo "如果上面这行不是 SELFCONTAINED-v4，说明 .github/workflows/main.yml 没更新到仓库"
+          echo "WORKFLOW-REV: 2026-11-27-SELFCONTAINED-v4.1"
+          echo "如果上面这行不是 SELFCONTAINED-v4.1，说明 .github/workflows/main.yml 没更新到仓库"
 
       - name: 1. Checkout
         uses: actions/checkout@v4
@@ -2358,10 +2358,127 @@ jobs:
           echo "APK 内图标字节数: $SZ  (源图 $SRC_SIZE)"
           echo "APK 内图标 md5: $(md5sum /tmp/icon_in_apk.png | cut -d' ' -f1)"
           if [ -f "$SRC_FILE" ]; then echo "源图 md5:       $(md5sum "$SRC_FILE" | cut -d' ' -f1)"; fi
-          # Flutter 默认图标只有几百字节；我们的 logo 是几十 KB。
-          # aapt 打包时可能重新压缩，所以用"大小量级"判定，不硬比 md5。
-          if [ "$SZ" -lt 8000 ]; then
-            echo "::error::APK 内图标仅 ${SZ}B，仍是 Flutter 默认图标，品牌化未生效"
+          # 【2026-11-27 校准，重要】不能只靠文件大小判断图标：
+          # aapt2 打包时会重新压缩 PNG，48KB 的源图进包后可能只剩 4.3KB（实测 4279B），
+          # 而 Flutter 默认图标是 1406B。大小只能当粗略信号。
+          # 真正的判据是"像素内容"：解码 APK 里的图标，和源图比平均颜色 + 平均透明度。
+          # 实测：默认图标与我们的 logo 差 88；经过量化压缩后通常差 < 5。
+          # 解码失败（罕见的 PNG 格式）时降级为"字节数 > 1600"。
+          SRC_REAL=""
+          if [ -f "$SRC_FILE" ]; then SRC_REAL="$SRC_FILE"; fi
+          python3 - "/tmp/icon_in_apk.png" "$SRC_REAL" <<'PYCHK'
+          import struct, sys, zlib
+
+
+          def pixels(data):
+              assert data[:8] == b'\x89PNG\r\n\x1a\n'
+              i, idat, plte = 8, b'', None
+              w = h = bd = ct = None
+              while i < len(data):
+                  ln = struct.unpack('>I', data[i:i + 4])[0]
+                  typ = data[i + 4:i + 8]
+                  body = data[i + 8:i + 8 + ln]
+                  if typ == b'IHDR':
+                      w, h, bd, ct = struct.unpack('>IIBB', body[:10])
+                  elif typ == b'PLTE':
+                      plte = body
+                  elif typ == b'IDAT':
+                      idat += body
+                  elif typ == b'IEND':
+                      break
+                  i += 12 + ln
+              raw = zlib.decompress(idat)
+              if ct == 3:
+                  if bd != 8:
+                      raise ValueError('palette bitdepth %d' % bd)
+                  bpp, stride = 1, w
+              else:
+                  if bd != 8:
+                      raise ValueError('bitdepth %d' % bd)
+                  bpp = {0: 1, 2: 3, 4: 2, 6: 4}[ct]
+                  stride = w * bpp
+              rows, prev, pos = [], bytearray(stride), 0
+              for _ in range(h):
+                  f = raw[pos]
+                  pos += 1
+                  line = bytearray(raw[pos:pos + stride])
+                  pos += stride
+                  if f == 1:
+                      for x in range(bpp, stride):
+                          line[x] = (line[x] + line[x - bpp]) & 255
+                  elif f == 2:
+                      for x in range(stride):
+                          line[x] = (line[x] + prev[x]) & 255
+                  elif f == 3:
+                      for x in range(stride):
+                          a = line[x - bpp] if x >= bpp else 0
+                          line[x] = (line[x] + ((a + prev[x]) >> 1)) & 255
+                  elif f == 4:
+                      for x in range(stride):
+                          a = line[x - bpp] if x >= bpp else 0
+                          b = prev[x]
+                          c = prev[x - bpp] if x >= bpp else 0
+                          p = a + b - c
+                          pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                          pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                          line[x] = (line[x] + pr) & 255
+                  rows.append(bytes(line))
+                  prev = line
+              out = []
+              for line in rows:
+                  if ct == 3:
+                      for v in line:
+                          out.append((plte[v * 3], plte[v * 3 + 1], plte[v * 3 + 2], 255))
+                  elif ct == 6:
+                      for x in range(0, len(line), 4):
+                          out.append((line[x], line[x + 1], line[x + 2], line[x + 3]))
+                  elif ct == 2:
+                      for x in range(0, len(line), 3):
+                          out.append((line[x], line[x + 1], line[x + 2], 255))
+                  elif ct == 0:
+                      for v in line:
+                          out.append((v, v, v, 255))
+                  else:
+                      for x in range(0, len(line), 2):
+                          out.append((line[x], line[x], line[x], line[x + 1]))
+              return out
+
+
+          def sig(px):
+              sa = sum(p[3] for p in px)
+              if sa == 0:
+                  return (0, 0, 0, 0)
+              return (sum(p[0] * p[3] for p in px) / sa,
+                      sum(p[1] * p[3] for p in px) / sa,
+                      sum(p[2] * p[3] for p in px) / sa,
+                      sa / len(px))
+
+
+          apk_icon, src = sys.argv[1], sys.argv[2]
+          try:
+              a = sig(pixels(open(apk_icon, 'rb').read()))
+          except Exception as exc:
+              print('::warning::无法解码 APK 内图标（%s），降级为大小判断' % exc)
+              sys.exit(0)
+          print('APK 图标指纹: R%.0f G%.0f B%.0f A%.0f' % a)
+          if not src:
+              print('::warning::没有源图可比对，降级为大小判断')
+              sys.exit(0)
+          s = sig(pixels(open(src, 'rb').read()))
+          print('源图 指纹:    R%.0f G%.0f B%.0f A%.0f' % s)
+          d = max(abs(x - y) for x, y in zip(a, s))
+          print('指纹最大差异: %.1f' % d)
+          if d > 40:
+              print('::error::APK 里的图标与源图差 %.0f（Flutter 默认图标差 88）——图标没被真正装进包里' % d)
+              sys.exit(1)
+          if d > 24:
+              print('::warning::图标差异 %.0f，可能被强量化压缩，但内容一致' % d)
+          sys.exit(0)
+          PYCHK
+
+          # 兜底：像素比对被跳过时，用"明显大于默认图标"来判断
+          if [ "$SZ" -lt 1600 ]; then
+            echo "::error::APK 内图标仅 ${SZ}B（Flutter 默认图标约 1406B），品牌化未生效"
             exit 1
           fi
           echo "branding verified: label + icon both inside APK"
